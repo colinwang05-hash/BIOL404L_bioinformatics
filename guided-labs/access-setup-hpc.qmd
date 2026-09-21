@@ -1,6 +1,6 @@
 ---
 title: "Accessing W&M's HPC"
-author: "Your Name"
+author: "Colin Wang"
 date: 2026-08-31
 projects: "guided-learning"
 keywords:
@@ -104,9 +104,8 @@ For both PCs and Macs, I recommend using the terminal to access SciClone.
 2. Connect to the remote server using `ssh` with your username:
 
    ::: {.callout-note title="SSH into Bora"}
-   In the code below, replace `wm-username` with your W&M username!
    ```bash
-   ssh wm-username@bora.sciclone.wm.edu
+   ssh cwwang@bora.sciclone.wm.edu
    ```
    :::
 
@@ -203,7 +202,7 @@ You made it!
 
     You can do this as many times as needed, although it can get confusing...
     :::
-14. Where are you now? How would you check?
+14. Where are you now? How would you check? using pwd
 15. If you feel comfortable, make sure to move back into the Biol404L folder.
 16. One last task before we continue! Make a new directory called `Slurm_Scripts` then move into it!
 
@@ -281,6 +280,7 @@ I have placed a template of one below (I will break down what each part means!):
 #SBATCH --mem=8G
 
 ```
+You can change the job name, the -t refers to parallelizing tasks or doing many things at the same time, and the bottom line controls how much memory this task will take up.
 
 It is nice to keep your job submission scripts together, staying organized is KEY!
 
@@ -291,7 +291,7 @@ It is nice to keep your job submission scripts together, staying organized is KE
 We will actually be submitting a job to make our container ***and*** install some software!
 The easiest option is to use an existing text editor in the terminal, `pico`
 
-1. Open a new file, `prep_conda_env.sh`, with `pico`
+1. Open a new file, `nano prep_conda_env.sh`, with `pico`
    Your screen should be empty!
 
 2. Copy and paste the template for our job submission that was found in the last section
@@ -333,7 +333,7 @@ In it we will install several pieces of software:
    ```bash
    sbatch prep_conda_env.sh
    ```
-9. Now we wait... You can track the progress in the queue!
+9. Now we wait... You can track the progress in the queue! Very useful!
    ```bash
    squeue --m
    ```
@@ -341,6 +341,10 @@ In it we will install several pieces of software:
    ```bash
    squeue
    ```
+head slurm-[insert JOBID #].out will show the first 10 jobs running rn
+
+tail slurm-[insert JOBID #].out will show the last 10 jobs
+
 10. Once this is finished, you will need to make one more container! Updating the
 `prep_conda_env.sh` script, you will need to:
    - [ ] create a new container called `txpt_quant`
@@ -390,20 +394,23 @@ Below, the steps are numbered with emtpy code blocks below them. Copy-paste your
 
 1. Use `ssh` to log onto `bora`
    ```bash
-   CODE GOES HERE
+   ssh cwwang@bora.sciclone.wm.edu
    ```
 
 2. Move into your Biol404L directory
    ```bash
-   CODE GOES HERE
+   cd/Desktop/coding/"BIOL 404L"/BIOL404L_bioinformatics
    ```
 
 3. Make two new directories, `raw_read_prep` and `transcript_quantification`, in your Biol404L directory
    ```bash
-   CODE GOES HERE
+   mkdir raw_read_prep
+   mkdir transcript_quantification
    ```
 
 4. Activate your conda `sra_prep` container (make sure to load miniforge3 first)
    ```bash
-   CODE GOES HERE
+   module load miniforge3/24.9.2-0
+   nano sra_prep.sh
+   sbatch sra_prep.sh
    ```
