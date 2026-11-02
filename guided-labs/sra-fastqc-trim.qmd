@@ -1,6 +1,6 @@
 ---
 title: "Working with SRA Data"
-author: "YOUR-NAME"
+author: "Colin Wang"
 date: 2026-09-09
 projects: "guided-learning"
 keywords:

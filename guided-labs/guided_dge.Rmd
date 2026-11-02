@@ -1,0 +1,383 @@
+---
+title: "guided_dge.Rmd"
+author: "Colin_W"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+ install.packages("BiocManager")
+```
+
+```{r}
+# install a bunch of software (only need to do once)
+BiocManager::install("tximport")
+BiocManager::install("DESeq2")
+BiocManager::install("readr")
+BiocManager::install("apeglm")
+BiocManager::install("txdbmaker")
+BiocManager::install("AnnotationDbi")
+BiocManager::install("pheatmap")
+```
+
+```{r}
+library(tximport)
+library(DESeq2)
+library(readr)
+library(apeglm)
+library(txdbmaker)
+library(AnnotationDbi)
+library(pheatmap)
+```
+
+```{r}
+# create the transcript-db table from the Drosophia.Genome.gtf file, then extract the transcript names
+txdb <- makeTxDbFromGFF(file = "/Users/colinwang/Desktop/coding/BIOL\ 404L/Guided_DGE_Data/Drosophila.Genome.gtf", format = "gtf")
+k <- keys(txdb, keytype = "TXNAME")
+```
+
+```{r}
+# pair each transcript name with its corresponding gene ID, so select the two columns with the keys and IDs
+tx2gene <- select(txdb, keys = k, columns = "GENEID", keytype = "TXNAME")
+head(tx2gene)
+```
+
+```{r}
+# save this table just in case to your local folder
+write.csv(tx2gene, file = "/Users/colinwang/Desktop/coding/BIOL\ 404L/Guided_DGE_Data/dmel.tx2gene", row.names = FALSE)
+```
+
+```{r}
+# make a variable of the path to your folder with the metadata file
+dir <- "/Users/colinwang/Desktop/coding/BIOL\ 404L/Guided_DGE_Data/"
+samples <- read.csv(file.path(dir, "DGE.Drosophila.Metadata.csv"))
+head(samples)
+```
+
+```{r}
+# tell R where the quant.sf files are in our folder
+quant_files <- file.path(dir, samples$Quant_Folders, "quant.sf")
+head(quant_files)
+```
+
+```{r}
+# link the quant.sf files to the tx2gene data we prepared, also telling R that the data were generated with Salmon
+txi <- tximport(quant_files, type = "salmon", tx2gene = tx2gene)
+# explicitly describe our groups following our metadata table
+samples$group <- factor(paste(samples$Geographic.Location, samples$Temperature, sep = "_"))
+samples$group
+dds <- DESeqDataSetFromTximport(txi, colData = samples, design = ~ group)
+```
+
+```{r}
+# QUALITY CHECKING BEFORE DGE
+# look at the actual data we prepared for DESeq2
+View(counts(dds))     # this opens a huge table in a new R window
+```
+
+```{r}
+# normalize the read counts & make a PCA plot
+rld = rlog(dds, blind = TRUE)
+plotPCA(rld, intgroup = 'Temperature')
+```
+
+```{r}
+# plot two variables at once on the same PCA plot!
+plotPCA(rld, intgroup = c('Temperature', 'Geographic.Location'))
+```
+
+```{r}
+# plot a heatmap
+meta <- data.frame(samples$Temperature, samples$Geographic.Location, row.names = colnames(txi$counts))
+
+# converts the dataframe to a matrix
+rld_mat <- assay(rld)
+
+# generates the pairwise correlation matrix from the raw matrix
+rld_corr <- cor(rld_mat)
+
+pheatmap(rld_corr, annotation = meta)
+```
+
+```{r}
+# RUNNING THE DGE ANALYSIS
+# remove any rows (genes) that really contain no information or data... commonly you remove any row that has <10 reads in it (summed across all samples)
+good_rows <- rowSums(counts(dds)) >= 10
+dds <- dds[good_rows,]
+# then run the analysis!
+dds <- DESeq(dds)
+```
+
+```{r}
+# look at potential contrasts that might be interesting
+resultsNames(dds)
+```
+```{r}
+# this is the general code for how to get the result for a specific pair of comparisons
+result_sample_cond1_cond2 <- results(dds, contrast = c("sample", "cond2", "cond1"))
+```
+
+```{r}
+# assess the differential gene expression between temps in the Maine population
+result_maine_21C_29C <- results(dds, contrast = c("group", "Maine_29C", "Maine_21C"), alpha = 0.05)
+summary(result_maine_21C_29C)
+```
+
+```{r}
+# adjust the p-values using a GLM, which will make our estimates for differential expression a bit more conservative (but better)
+result_maine_21C_29C_apeglm <- lfcShrink(dds, coef = "group_Maine_29C_vs_Maine_21C", type = 'apeglm', res = result_maine_21C_29C)
+summary(result_maine_21C_29C_apeglm)
+```
+
+```{r}
+# make some MA plots to visualize our results!
+plotMA(result_maine_21C_29C, ylim=c(-2,2))         # raw reads
+plotMA(result_maine_21C_29C_apeglm, ylim=c(-2,2))  # lfcShrink results
+```
+
+```{r}
+# finally, save those results to a table
+out_csv <- file.path(dir,"Maine.21C_29C.DEG.csv")
+write.csv(as.data.frame(result_maine_21C_29C_apeglm), file = out_csv)
+```
+
+
+
+Now, the lab on the week of 10/26/26:
+Today, we will re-work some of our differential gene expression analyses from last week. There are two reasons for this: 1) practice! and 2) there is a more appropriate means to shrink the log2-fold change. We were using apeglm, but for multi-factor designs, we ought to be using ashr instead.
+```{r}
+# load packages from last time
+library(tximport)
+library(DESeq2)
+library(readr)
+library(txdbmaker)
+library(AnnotationDbi)
+library(pheatmap)
+
+# load new packages too
+library(clusterProfiler)
+library(AnnotationHub)
+library(ashr)
+library(enrichplot)
+library(ggplot2)
+library(dplyr)
+library(RColorBrewer)
+library(tibble)
+library(tidyr)
+library(scales)
+```
+
+```{r}
+# I redid the code chunks from last time through creating dds (line 70)
+# remove the rows from your dds (DESeq2 dataset)
+good_rows <- rowSums(counts(dds)) >= 10
+dds <- dds[good_rows,]
+
+# then rerun the analysis!
+dds <- DESeq(dds)
+```
+
+```{r}
+# now check for the differentially-expressed genes in our dataset, which is inherently a pairwise comparison
+# start with the high & low temp Maine samples
+result_maine_21C_29C_ashr <- lfcShrink(dds, contrast=c("group", "Maine_29C", "Maine_21C"), type = 'ashr', alpha = 0.05)
+
+print(summary(result_maine_21C_29C_ashr))
+# now that we're using ashr, we are finding 984 DE genes instead of 600
+# apeglm is the more conservative approach but there's nothing wrong with using either approach to shrink the LFC
+```
+
+```{r}
+# we have now built and linked our dataset names into our metadatatable, but let's now make a new column with the names as the geographic location, temp, & replicate (EX: Maine_21C_1)
+samples$sample_name <- paste(samples$Geographic.Location, samples$Temperature, samples$Replicate, sep = "_")
+# make sure to link the columns to the sample those data represent
+colnames(dds) <- samples$sample_name
+# now normalize the read counts, while updating the column names to be easier to follow
+normalized_counts <- counts(dds, normalized=T) %>%
+ data.frame() %>%
+  rownames_to_column(var="gene") %>%
+  as_tibble()
+# look at the top few rows of the table, which shows the normalized counts of each of the genes for each of our treatment groups!
+head(normalized_counts)
+```
+
+```{r}
+# build a heatmap
+heat_colors <- rev(brewer.pal(6, "RdYlBu"))
+pheatmap(normalized_counts[2:13],
+      color = heat_colors,
+      cluster_rows = T,
+      cluster_cols = T,
+      show_rownames = F,
+      border_color = NA,
+      fontsize = 10,
+      scale = "row",
+      treeheight_row = 0,
+      height = 20)
+# I believe the phylogenetic tree at the top is created based on the similarity of these treatments, in terms of which genes in the sample are upregulated, downregulated, or not affected
+# this is hierarchical clustering!
+# we can look for clumps, like clumps of red or blue
+# note that there's some funny business going on... for example, Panama_29C_1 is put very far away from Panama_21C_2 & Panama_21C_3... this is a sign there are batch effects or some other confounding variable present
+# but for the most part, the high temp samples are clustering together well
+```
+
+```{r}
+# make a volcano plot, adding gene as the first column header
+res_df <- as.data.frame(result_maine_21C_29C_ashr) %>%
+   tibble::rownames_to_column("gene")
+# remove any rows (genes) missing adjusted p-values
+res_df <- res_df %>% filter(!is.na(padj))
+# define our significance thresholds! EX: if a gene has an LFC of at least 1 and an adjusted p-value < 0.05, it will be labeled upregulated
+res_df <- res_df %>%
+  mutate(diffexpressed = case_when(
+  log2FoldChange > 1 & padj < 0.05 ~ "UP",
+  log2FoldChange < -1 & padj < 0.05 ~ "DOWN",
+  TRUE ~ "NOT"
+))
+
+head(res_df)
+```
+
+```{r}
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = diffexpressed)) + # plots the points and colors them based on their "type" of expression
+  geom_point(alpha = 0.6, size = 1.5) + xlim(-2, 2) +
+  # defines the size and opacity (alpha) of the points. alpha is NOT the p-value
+  scale_color_manual(values = c("DOWN" = "blue", "NOT" = "grey", "UP" = "red")) +
+  # manually setting the colors for our DEGs
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  # makes the x-axis log2-fold change lines at x = -1 and x = 1
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  # makes the y-axis adjusted p-value line
+  theme_minimal() +         # keeps the plot less crowded
+  labs(x = "log2 Fold Change",
+       y = "-log10 Adjusted p-value",
+       color = "Expression") # labeles the axes and legend
+
+```
+
+```{r}
+# save the tables to your computer
+write.csv(result_maine_21C_29C_ashr, file.path(dir, "Maine_21C_29C.DGE.csv"), row.names = FALSE)
+
+write.csv(normalized_counts, file.path(dir, "Dmel_NormCounts.DGE.csv"), row.names = FALSE)
+
+save(dds, file = file.path(dir, "Dmel.DDS.rda"))
+```
+
+
+```{r}
+# GENE ONTOLOGY ENRICHMENT ANALYSES
+# now we need to figure out the difference in gene functions may be between our samples
+# initialize AnnotationHub
+ah <- AnnotationHub()
+# search for Drosophila
+print(query(ah, c("Drosophila melanogaster", "OrgDb")))
+# grab the organism database using the given accession number
+org_db <- ah[["AH121952"]]
+```
+
+```{r}
+# make some smaller dataframes, one with ALL the DEGs, one with the upregulated DEGs, and a final one with the downregulated DEGs
+# remember all of this is only for ONE pairwise comparison, which in this case is Maine's 29C vs 21C samples. you can perform another for a diff test!
+sig_degs <- res_df %>% filter(diffexpressed != "NOT")
+only_up_degs <- res_df %>% filter(diffexpressed == "UP")
+only_down_degs <- res_df %>% filter(diffexpressed == "DOWN")
+```
+
+```{r}
+# we only need the gene names from each of these tables, but we also need to know ALL the gene names for our comparisons, so we can determine if any given term is enriched relative to the "universe" of Drosophila's genes & gene ontologies
+all_gene_names <- c(res_df$gene)
+sig_deg_names <- c(sig_degs$gene)
+sig_up_names <- c(only_up_degs$gene)
+sig_down_names <- c(only_down_degs$gene)
+```
+
+```{r}
+# we need to trim the Dmel part of the gene names
+clean_sig_deg_names <- unlist(lapply(sig_deg_names, function(x) gsub("Dmel_", "", x)))
+clean_uni_names <- unlist(lapply(all_gene_names, function(x) gsub("Dmel_", "", x)))
+clean_sig_up_names <- unlist(lapply(sig_up_names, function(x) gsub("Dmel_", "", x)))
+clean_sig_down_names <- unlist(lapply(sig_down_names, function(x) gsub("Dmel_", "", x)))
+```
+
+```{r}
+# finally, the gene names are all clean, so we can figure out the functional enrichment patterns in our dataset!
+ego <- enrichGO(
+ gene = clean_sig_deg_names,
+ universe = clean_uni_names,
+ OrgDb = org_db,
+ keyType = "FLYBASECG", # adjust keyType based on your input IDs
+ ont = "BP", # BP: Biological Process, MF: Molecular Function, CC: Cellular Component, ALL: get all of them!
+ pAdjustMethod = "BH",
+ qvalueCutoff = 0.05,
+ readable = TRUE)
+```
+
+```{r}
+# make the dotplot to check it out
+dotplot(ego, showCategory=50)
+```
+
+```{r}
+# repeat the enrichment GO term analysis using the clean up-regulated genes
+ego_sig_up <- enrichGO(
+ gene = clean_sig_up_names,
+ universe = clean_uni_names,
+ OrgDb = org_db,
+ keyType = "FLYBASECG", # adjust keyType based on your input IDs
+ ont = "BP", # BP: Biological Process, MF: Molecular Function, CC: Cellular Component, ALL: get all of them!
+ pAdjustMethod = "BH",
+ qvalueCutoff = 0.05,      # you can also change this p-value if you want
+ readable = TRUE)
+dotplot(ego_sig_up, showCategory=50)
+```
+
+```{r}
+# and the downregulated genes...
+ego_sig_down <- enrichGO(
+ gene = clean_sig_down_names,
+ universe = clean_uni_names,
+ OrgDb = org_db,
+ keyType = "FLYBASECG", # adjust keyType based on your input IDs
+ ont = "BP", # BP: Biological Process, MF: Molecular Function, CC: Cellular Component, ALL: get all of them!
+ pAdjustMethod = "BH",
+ qvalueCutoff = 0.05,
+ readable = TRUE)
+dotplot(ego_sig_down, showCategory=50)
+```
+
+```{r}
+# save the results for ALL of these data
+goa_summary <- data.frame(ego)
+up_goa_summary <- data.frame(ego_sig_up)
+down_goa_summary <- data.frame(ego_sig_down)
+
+write.csv(goa_summary, file.path(dir, "Maine_21C_29C.All_DEGs.GOEnrichment.csv"))
+write.csv(up_goa_summary, file.path(dir, "Maine_21C_29C.UpReg_DEGs.GOEnrichment.csv"))
+write.csv(up_goa_summary, file.path(dir, "Maine_21C_29C.DownReg_DEGs.GOEnrichment.csv"))
+```
+
+```{r}
+# the final plot we'll make is a network plot that instead of showing interactions, it makes networks of genes with similar "functions" based on GO term similarity
+# they aren't always helpful but can be informative!
+ego_sim <- enrichplot::pairwise_termsim(ego)
+emapplot(ego_sim, showCategory = 50)
+```
+
+```{r}
+# you can also rerun the enrichGO for your upregulated genes (ego_sig_up) with ont = ALL, then run the following command:
+
+p_facet <- barplot(
+  ego_sig_up,
+  x = "Count",
+  showCategory = 15,
+  split = "ONTOLOGY") +
+  aes(fill = ONTOLOGY) +
+  scale_fill_brewer(palette = "Set2") +
+  enrichplot::autofacet(by = "row", scales = "free")
+
+p_facet + scale_y_discrete()
+```
+
+
